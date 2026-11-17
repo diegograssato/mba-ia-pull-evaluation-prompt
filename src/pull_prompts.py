@@ -29,23 +29,70 @@ DICAS DE IMPLEMENTAÇÃO:
 - Use `save_yaml` de utils.py para gravar o resultado no arquivo .yml.
 """
 
-import os
 import sys
 from pathlib import Path
+
 from dotenv import load_dotenv
 from langsmith import Client
-from utils import save_yaml, check_env_vars, print_section_header
+
+from utils import check_env_vars, print_section_header, save_yaml
 
 load_dotenv()
 
+SEED_PROMPT = "leonanluppi/bug_to_user_story_v1"
+OUTPUT_FILE = (
+    Path(__file__).resolve().parent.parent / "prompts" / "bug_to_user_story_v1.yml"
+)
 
-def pull_prompts_from_langsmith():
-    ...
+
+def _message_template(message: object) -> str:
+    """Extrai o template textual de uma mensagem LangChain serializada."""
+    prompt = getattr(message, "prompt", None)
+    template = getattr(prompt, "template", None)
+    if not isinstance(template, str):
+        raise TypeError(f"Mensagem sem template textual: {type(message).__name__}")
+    return template
 
 
-def main():
-    """Função principal"""
-    ...
+def pull_prompts_from_langsmith() -> Path:
+    """Baixa o prompt semente e o serializa no formato YAML do laboratório."""
+    prompt = Client().pull_prompt(
+        SEED_PROMPT,
+        dangerously_pull_public_prompt=True,
+    )
+    if len(prompt.messages) < 2:
+        raise ValueError("O prompt remoto deve conter mensagens system e user.")
+
+    data = {
+        "bug_to_user_story_v1": {
+            "description": "Prompt inicial obtido do LangSmith Prompt Hub",
+            "system_prompt": _message_template(prompt.messages[0]),
+            "user_prompt": _message_template(prompt.messages[1]),
+            "version": "v1",
+            "source": SEED_PROMPT,
+            "tags": ["bug-analysis", "user-story", "baseline"],
+        }
+    }
+    if not save_yaml(data, str(OUTPUT_FILE)):
+        raise RuntimeError(f"Não foi possível salvar {OUTPUT_FILE}.")
+    return OUTPUT_FILE
+
+
+def main() -> int:
+    """Executa o pull e informa o arquivo produzido."""
+    print_section_header("PULL DO PROMPT INICIAL")
+    if not check_env_vars(["LANGSMITH_API_KEY"]):
+        return 1
+
+    try:
+        output_file = pull_prompts_from_langsmith()
+    # Fronteira da CLI: o SDK pode propagar diferentes erros HTTP/serialização.
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ Erro ao fazer pull do prompt: {exc}")
+        return 1
+
+    print(f"✓ Prompt '{SEED_PROMPT}' salvo em {output_file}")
+    return 0
 
 
 if __name__ == "__main__":
